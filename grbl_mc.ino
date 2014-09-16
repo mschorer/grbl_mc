@@ -30,7 +30,7 @@
  
 #define F_CPU 16000000
 
-#define VERSION  "1.0j"
+#define VERSION  "1.0k"
 
 #ifndef TWI_RX_BUFFER_SIZE
 #define TWI_RX_BUFFER_SIZE ( 16 )
@@ -83,6 +83,8 @@
 #define UP 1
 #define DOWN 2
 
+#define MSG_LEN 45
+#define MSG_MAX 42
 //-----------------------------------------------------------
 
 enum SequencerState_t {
@@ -123,8 +125,10 @@ uint8_t d_tool_index = 0;
 volatile uint8_t tool_current = 0;
 uint8_t d_tool_current = 0;
 
-volatile char message[32] = "---------------------";
+volatile char message[MSG_LEN] = "";
+char mbuffer[MSG_LEN] = "";
 volatile bool msg_changed = true;
+gText msgDisplay, tlabelDisplay, coolDisplay;
 
 volatile boolean _forceOff = false;
 
@@ -308,24 +312,37 @@ void setupUI() {
   GLCD.CursorTo(0,2);
   GLCD.Printf("rpm");
 
-  GLCD.CursorTo(0,4);
-  GLCD.print("Coolant");
+  coolDisplay = gText( 0, 28, 63, 44, SCROLL_UP);
+  coolDisplay.SelectFont( System5x7);
+  coolDisplay.SetFontColor(BLACK); // set font color 
+  coolDisplay.ClearArea();
+  coolDisplay.CursorTo(0,0);
+  coolDisplay.print("Coolant");
 
   rpmDisplay = gText(57, 0, 127, 32, SCROLL_DOWN);
   rpmDisplay.SelectFont( lcdnums14x24 /*Verdana24 fixednums15x31*/);
   rpmDisplay.SetFontColor(BLACK); // set font color 
   rpmDisplay.ClearArea();
 
-  toolDisplay = gText( 115, 32, 127, 48, SCROLL_DOWN);
+  tlabelDisplay = gText( 70, 28, 114, 44, SCROLL_DOWN);
+  tlabelDisplay.SelectFont( System5x7);
+  tlabelDisplay.SetFontColor(BLACK); // set font color 
+  tlabelDisplay.ClearArea();
+
+  tlabelDisplay.CursorTo( 0,0);
+  tlabelDisplay.print("Tool#");
+  tlabelDisplay.CursorTo( 2,1);
+  tlabelDisplay.print("->#");
+
+  toolDisplay = gText( 115, 28, 127, 44, SCROLL_DOWN);
   toolDisplay.SelectFont( lcdnums12x16);
   toolDisplay.SetFontColor(BLACK); // set font color 
   toolDisplay.ClearArea();
 
-  GLCD.CursorTo( 12,4);
-  GLCD.print("Tool #");
-
-  GLCD.CursorTo( 13,5);
-  GLCD.print("#  ->");
+  msgDisplay = gText( 0, 48, 127, 63, SCROLL_UP);
+  msgDisplay.SelectFont( System5x7);
+  msgDisplay.SetFontColor(BLACK); // set font color 
+  msgDisplay.ClearArea();
   
   GLCD.DrawRect( 0,0,52,6,BLACK);
 }
@@ -355,13 +372,13 @@ void updateRpm( bool force) {
 
 void updateCooling( bool force) {
   if ( cooling != d_cooling || force) {
-    GLCD.CursorTo(0,5);
+    coolDisplay.CursorTo(0,1);
     switch( cooling) {
-      case 3: GLCD.print( "[MST/FLD]"); break;
-      case 2: GLCD.print( "[MST/---]"); break;
-      case 1: GLCD.print( "[---/FLD]"); break;
+      case 3: coolDisplay.print( "[MST/FLD]"); break;
+      case 2: coolDisplay.print( "[---/FLD]"); break;
+      case 1: coolDisplay.print( "[MST/---]"); break;
       case 0:
-      default: GLCD.print( "[---/---]"); break;
+      default: coolDisplay.print( "[---/---]"); break;
     }
     d_cooling = cooling;
   }
@@ -369,8 +386,8 @@ void updateCooling( bool force) {
 
 void updateTooling( bool force) {
   if ( tool_index != d_tool_index || force) {
-    GLCD.CursorTo( 14,5);
-    GLCD.print( tool_index, DEC);
+    tlabelDisplay.CursorTo( 5, 1);
+    tlabelDisplay.print( tool_index, DEC);
     d_tool_index = tool_index;
   }
   if ( tool_current != d_tool_current || force) {
@@ -381,8 +398,29 @@ void updateTooling( bool force) {
 }
 
 void updateMessage() {
-  GLCD.CursorTo(0,7);
-  GLCD.Printf( "%s", message);
+  uint8_t i=0;
+  uint8_t j=0;
+  
+  while(( j < MSG_MAX) && ( i < MSG_LEN)) {
+    if ( message[i] == 0) break;
+    
+    mbuffer[i] = message[i];
+    i++;
+
+    switch( message[i]) {
+      case 10:
+      case 13:
+      break;
+    
+      default:
+        j++;
+    }
+  }
+  mbuffer[i] = 0;  
+
+  msgDisplay.ClearArea();
+  msgDisplay.CursorTo(0,0);
+  msgDisplay.Puts( mbuffer);
   msg_changed = false;  
 }
 
