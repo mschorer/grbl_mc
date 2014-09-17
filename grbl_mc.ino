@@ -30,7 +30,7 @@
  
 #define F_CPU 16000000
 
-#define VERSION  "1.0k"
+#define VERSION  "1.1a"
 
 #ifndef TWI_RX_BUFFER_SIZE
 #define TWI_RX_BUFFER_SIZE ( 16 )
@@ -319,10 +319,12 @@ void setupUI() {
   coolDisplay.CursorTo(0,0);
   coolDisplay.print("Coolant");
 
-  rpmDisplay = gText(57, 0, 127, 32, SCROLL_DOWN);
+  rpmDisplay = gText(57, 0, 127, 24, SCROLL_DOWN);
   rpmDisplay.SelectFont( lcdnums14x24 /*Verdana24 fixednums15x31*/);
   rpmDisplay.SetFontColor(BLACK); // set font color 
   rpmDisplay.ClearArea();
+
+  GLCD.DrawLine( 0,25,127,25,BLACK);
 
   tlabelDisplay = gText( 70, 28, 114, 44, SCROLL_DOWN);
   tlabelDisplay.SelectFont( System5x7);
@@ -338,6 +340,8 @@ void setupUI() {
   toolDisplay.SelectFont( lcdnums12x16);
   toolDisplay.SetFontColor(BLACK); // set font color 
   toolDisplay.ClearArea();
+
+  GLCD.DrawLine( 0,45,127,45,BLACK);
 
   msgDisplay = gText( 0, 48, 127, 63, SCROLL_UP);
   msgDisplay.SelectFont( System5x7);
