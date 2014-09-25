@@ -30,7 +30,7 @@
  
 #define F_CPU 16000000
 
-#define VERSION  "1.1a"
+#define VERSION  "1.2a"
 
 #ifndef TWI_RX_BUFFER_SIZE
 #define TWI_RX_BUFFER_SIZE ( 16 )
@@ -43,9 +43,9 @@
 #define PORT_SERVO PORTC
 #define PIN_SERVO  PC6
 
-#define DIR_LED    DDRC
-#define PORT_LED   PORTC
-#define PIN_LED    PC7
+#define DIR_LED    DDRD
+#define PORT_LED   PORTD
+#define PIN_LED    PD5
 
 #define PINB_UPDN   PIND
 #define DIR_UPDN    DDRD
@@ -53,9 +53,9 @@
 #define PIN_UP      PD2
 #define PIN_DOWN    PD3
 
-#define PINB_MUTE   PINC
-#define DIR_MUTE    DDRC
-#define PORT_MUTE   PORTC
+#define PINB_MUTE   PINE
+#define DIR_MUTE    DDRE
+#define PORT_MUTE   PORTE
 #define PIN_MUTE    PE6
 
 #define DIR_RPM_SENSE   DDRD
@@ -85,6 +85,30 @@
 
 #define MSG_LEN 45
 #define MSG_MAX 42
+
+#define CMD_MX  0x00
+#define CMD_TX  0x10
+#define CMD_MSG 0x70
+
+#define CMD_M3  0x03
+#define CMD_M4  0x04
+#define CMD_M5  0x05
+
+#define CMD_M6  0x06
+
+#define CMD_M7  0x07
+#define CMD_M8  0x08
+#define CMD_M9  0x09
+
+#define COOLANT_OFF   0
+#define COOLANT_MIST  1
+#define COOLANT_FLOOD 2
+#define COOLANT_BOTH  3
+
+#define SPINDLE_CW   3
+#define SPINDLE_CCW  4
+#define SPINDLE_OFF  5
+
 //-----------------------------------------------------------
 
 enum SequencerState_t {
@@ -98,7 +122,7 @@ volatile byte servo_pause = 0;
 volatile byte pin_updn = 0xff;
 volatile byte pin_mute = 0xff;
 
-volatile int _rpm_value = 0;
+volatile int _rpm_value = 2000;
 volatile int _rpm_current = 0;
 
 volatile uint16_t sys_ticks;
@@ -110,13 +134,18 @@ volatile uint16_t _rpm_avg_sum = 0;
 volatile int _rpm_pwm = PWM_OFF;
 volatile int d_rpm_pwm = -1;
 
+gText spindleMode;
+bool setup_smode = true;
+int _sMode = SPINDLE_OFF;
+int d_sMode = SPINDLE_OFF;
+
 gText rpmDisplay;
 bool setup_rpm = true;
 int d_rpm_value = -1;
 int d_rpm_current = -1;
 
-volatile uint8_t cooling = 0;
-uint8_t d_cooling = 0;
+volatile uint8_t coolant = 0;
+uint8_t d_coolant = 0;
 
 gText toolDisplay;
 bool setup_tooling = true;
@@ -172,12 +201,15 @@ void setup( void) {
   DIR_LED |= (1<< PIN_LED);      // set Pc7 as output
 //  PORT_LED &= ~(1<< PIN_LED);    // preset to 0
 
-  DDRD |= (1<< PD5);
+  // set spares to input
+  DDRC &= ~(1<< PC7);                // high
+  DDRF &= ~(1<< PF7);                // high
+  DDRD &= ~((1<< PD6) || (1<< PD4)); // high
 
   // enable pin-change interrupts for 3 sources
-//  EICRA = ((0<< ISC31) | (1<< ISC30) | (0<< ISC21) | (1<< ISC20)) | ( EICRA & 0x0f);
-//  EICRB = (0<< ISC61) | (1<< ISC60);
-//  EIMSK |= (1<< INT6) | (1<< INT3) | (1<< INT2);
+  EICRA = ((0<< ISC31) | (1<< ISC30) | (0<< ISC21) | (1<< ISC20)) | ( EICRA & 0x0f);
+  EICRB = (0<< ISC61) | (1<< ISC60);
+  EIMSK |= (1<< INT6) | (1<< INT3) | (1<< INT2);
   
   //----------------------------------------------------------------------------
   // setup time/counters
@@ -288,8 +320,9 @@ void loop( void) {
   while( true) {
     setLED( _rpm_pwm, _forceOff /* || ((PINB & (1<< PIN_MASTER)) == HIGH) */, _forceOff);
     
+    updateSMode( forcePaint);
     updateRpm( forcePaint);
-    updateCooling( forcePaint);
+    updateCoolant( forcePaint);
     updateTooling( forcePaint);
     if ( msg_changed) updateMessage();
 
@@ -300,8 +333,6 @@ void loop( void) {
     }
     tock = sys_ticks;
     forcePaint = false;
-        
-    PIND |= (1<< PD5);
   }
 }
 
@@ -318,6 +349,11 @@ void setupUI() {
   coolDisplay.ClearArea();
   coolDisplay.CursorTo(0,0);
   coolDisplay.print("Coolant");
+
+  spindleMode = gText(42, 9, 55, 24, SCROLL_DOWN);
+  spindleMode.SelectFont( fixed_bold10x15);
+  spindleMode.SetFontColor(BLACK); // set font color 
+  spindleMode.ClearArea();
 
   rpmDisplay = gText(57, 0, 127, 24, SCROLL_DOWN);
   rpmDisplay.SelectFont( lcdnums14x24 /*Verdana24 fixednums15x31*/);
@@ -351,6 +387,19 @@ void setupUI() {
   GLCD.DrawRect( 0,0,52,6,BLACK);
 }
 
+void updateSMode( bool force) {
+  if ( _sMode != d_sMode || force) {
+    spindleMode.CursorTo(0,0);
+    switch( _sMode) {
+      case SPINDLE_CW: spindleMode.print( "R"); break;
+      case SPINDLE_CCW: spindleMode.print( "L"); break;
+      case SPINDLE_OFF:
+      default: spindleMode.print( "-"); break;
+    }
+    d_sMode = _sMode;
+  }
+}
+
 void updateRpm( bool force) {
   if ( d_rpm_pwm != _rpm_pwm || force) {  
 /*    GLCD.CursorTo(0,0);
@@ -374,17 +423,17 @@ void updateRpm( bool force) {
   }
 }
 
-void updateCooling( bool force) {
-  if ( cooling != d_cooling || force) {
+void updateCoolant( bool force) {
+  if ( coolant != d_coolant || force) {
     coolDisplay.CursorTo(0,1);
-    switch( cooling) {
-      case 3: coolDisplay.print( "[MST/FLD]"); break;
-      case 2: coolDisplay.print( "[---/FLD]"); break;
-      case 1: coolDisplay.print( "[MST/---]"); break;
-      case 0:
+    switch( coolant) {
+      case COOLANT_BOTH: coolDisplay.print( "[MST/FLD]"); break;
+      case COOLANT_FLOOD: coolDisplay.print( "[---/FLD]"); break;
+      case COOLANT_MIST: coolDisplay.print( "[MST/---]"); break;
+      case COOLANT_OFF:
       default: coolDisplay.print( "[---/---]"); break;
     }
-    d_cooling = cooling;
+    d_coolant = coolant;
   }
 }
 
@@ -452,21 +501,38 @@ void receiveEvent( int howMany) {
       else if ( rpm < RPM_OFF) _rpm_value = RPM_OFF;
       else _rpm_value = rpm;
       
-      Setpoint = (double) _rpm_value;
+      if ( _sMode != SPINDLE_OFF) Setpoint = (double) _rpm_value;
     } else {
-      switch( (c & 0x70) >> 4) {
-        case 0x00:
-          cooling = (c & 0x03) ? ( cooling | c & 0x03) : 0;
+      uint8_t par = c & 0x0f;
+      switch( c & 0x70) {
+        // Mx commands
+        case CMD_MX:
+          switch( par) {
+            // spindle control M3/4/5
+            case CMD_M3:
+            case CMD_M4: _sMode = par; Setpoint = _rpm_value;
+            break;
+            case CMD_M5: _sMode = par; Setpoint = 0;
+            break;
+            
+            // tool change: M6
+            case CMD_M6: tool_current = tool_index;
+            break;
+            
+            // coolant control M7/8/9
+            case CMD_M7: coolant |= COOLANT_MIST; break;
+            case CMD_M8: coolant |= COOLANT_FLOOD; break;
+            case CMD_M9: coolant = COOLANT_OFF; break;
+          }
           break;
-          
-        case 0x01:
-          tool_current = c & 0x0f;
-          
-        case 0x02:
-          tool_index = c & 0x0f;
+
+        // Tx command          
+        case CMD_TX:
+          tool_index = par;
           break;
-          
-        case 0x07:
+        
+        // send message command
+        case CMD_MSG:
         default:
           byte msgidx = 0;
           while( howMany-- > 0 && msgidx < 31) {
@@ -592,9 +658,7 @@ ISR(TIMER3_COMPA_vect) {
 
   Input = (double) _rpm_current;
   myPID.Compute();
-  _rpm_pwm = (int) Output;
-
-  PINC |= (1<< PC7);    
+  _rpm_pwm = (int) Output;   
 }
 
 //----------------------------------------------------------------------------
