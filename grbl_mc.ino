@@ -2,11 +2,12 @@
   esc spindle controller for grbl
   by ms@ms-ite.de
   
-  - POC code!!
+  - PID controlled rpm
   - controlled via i2c
   - connects to a rotary encoder + switch for speed/manual stop
   - outputs a servo signal (1-2ms, 50Hz) for esc control
-  - no led feedback (cut trace) as i2c uses digisparks led pin
+  - some spare pins
+  - displays on a PowerTip PG12864 LCD
 */
 
 #include <inttypes.h>
@@ -30,7 +31,7 @@
  
 #define F_CPU 16000000
 
-#define VERSION  "1.2a"
+#define VERSION  "1.2b"
 
 #ifndef TWI_RX_BUFFER_SIZE
 #define TWI_RX_BUFFER_SIZE ( 16 )
@@ -45,6 +46,7 @@
 
 #define DIR_LED    DDRD
 #define PORT_LED   PORTD
+#define TOGGLE_LED PIND
 #define PIN_LED    PD5
 
 #define PINB_UPDN   PIND
@@ -86,10 +88,12 @@
 #define MSG_LEN 45
 #define MSG_MAX 42
 
+// defined commands using upper nibble
 #define CMD_MX  0x00
 #define CMD_TX  0x10
 #define CMD_MSG 0x70
 
+// values for CMD_MX, using lower nibble
 #define CMD_M3  0x03
 #define CMD_M4  0x04
 #define CMD_M5  0x05
@@ -100,14 +104,16 @@
 #define CMD_M8  0x08
 #define CMD_M9  0x09
 
+// spindle mode alogn Mx commands
+#define SPINDLE_CW   3
+#define SPINDLE_CCW  4
+#define SPINDLE_OFF  5
+
+// coolant bits
 #define COOLANT_OFF   0
 #define COOLANT_MIST  1
 #define COOLANT_FLOOD 2
 #define COOLANT_BOTH  3
-
-#define SPINDLE_CW   3
-#define SPINDLE_CCW  4
-#define SPINDLE_OFF  5
 
 //-----------------------------------------------------------
 
@@ -162,12 +168,8 @@ gText msgDisplay, tlabelDisplay, coolDisplay;
 volatile boolean _forceOff = false;
 
 double consKp=1.0, consKi=15.0, consKd=5.0;
-//double consKp=5, consKi=0.2, consKd=0.5;
 double Setpoint, Input, Output;
 PID myPID(&Input, &Output, &Setpoint, consKp, consKi, consKd, DIRECT);
-
-//int _blinkCount = 0;
-//int _blinkPhase = false;
 
 void setup( void) {
   GLCD.Init();
@@ -206,7 +208,7 @@ void setup( void) {
   DDRF &= ~(1<< PF7);                // high
   DDRD &= ~((1<< PD6) || (1<< PD4)); // high
 
-  // enable pin-change interrupts for 3 sources
+  // enable pin-change interrupts for up/down/mute sources
   EICRA = ((0<< ISC31) | (1<< ISC30) | (0<< ISC21) | (1<< ISC20)) | ( EICRA & 0x0f);
   EICRB = (0<< ISC61) | (1<< ISC60);
   EIMSK |= (1<< INT6) | (1<< INT3) | (1<< INT2);
@@ -277,12 +279,10 @@ void setup( void) {
   Wire.onReceive(receiveEvent); // register event
   Wire.onRequest(requestEvent); // register event
 
-  // set the cursor to column 0, line 1
-  // (note: line 1 is the second row, since counting begins with 0):
+  // give esc a change to check adapt to our signal, skip esc setup mode
   GLCD.print(" [min]");
   
-  // do not go into ESC set up mode
-  // output off for 4s
+  // output servo-off for 1s
   _rpm_pwm = RPM_OFF;
   setLED( _rpm_pwm, true, true);
   sys_ticks = 0;
@@ -291,8 +291,7 @@ void setup( void) {
   }
   GLCD.print( "[max]");
 
-  // make ESC detect digispark, do not enter ESC setup, allow ESC to scale to pulse/pause ratio
-  // output on for 1s
+  // output servo-max for 1s, this make the esc skip setup
   _rpm_pwm = PWM_MAX;
   setLED( _rpm_pwm, true, false);
 
@@ -333,6 +332,8 @@ void loop( void) {
     }
     tock = sys_ticks;
     forcePaint = false;
+    
+    TOGGLE_LED |= (1<< PIN_LED);
   }
 }
 
@@ -490,6 +491,7 @@ void receiveEvent( int howMany) {
     howMany--;
     
     if ( c & 0x80) {
+      // S-command
       rpm = ( c & 0x7f) << 8;
       if ( howMany > 0) {
         c = Wire.read();
